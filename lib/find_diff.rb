@@ -323,13 +323,14 @@ class FindDiff
         logger.info("Dropping Athena table")
         drop_athena_table = "DROP TABLE IF EXISTS #{MEDUSA_ATHENA_DB}.medusa_inventory_#{@yest_date_str};"
 
-        @athena_client.start_query_execution({
+        resp = @athena_client.start_query_execution({
         query_string: drop_athena_table,
         query_execution_context: {
             database: "#{MEDUSA_ATHENA_DB}",
         },
         work_group: "#{MEDUSA_ATHENA_WORKGROUP}",
         })
+        resp.query_execution_id
     end
 
     def drop_athena_diff_table
@@ -337,13 +338,14 @@ class FindDiff
         logger.info("Dropping Athena diff table")
         drop_athena_diff_table = "DROP TABLE IF EXISTS #{MEDUSA_ATHENA_DB}.medusa_inventory_diff_#{@yest_date_str};"
 
-        @athena_client.start_query_execution({
+        resp = @athena_client.start_query_execution({
         query_string: drop_athena_diff_table,
         query_execution_context: {
             database: "#{MEDUSA_ATHENA_DB}",
         },
         work_group: "#{MEDUSA_ATHENA_WORKGROUP}",
         })
+        resp.query_execution_id
     end
 
 end
