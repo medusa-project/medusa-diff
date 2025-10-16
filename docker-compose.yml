@@ -1,0 +1,23 @@
+services:
+  mockdusa:
+    hostname: mockdusa
+    image: 721945215539.dkr.ecr.us-east-2.amazonaws.com/mockdusa:latest
+    environment:
+      REPOSITORY_ROOT: /repo
+    volumes:
+      - type: bind
+        source: ./docker/mockdusa/content
+        target: /repo
+        read_only: true
+  medusa-diff:
+    depends_on:
+      - mockdusa
+    platform: linux/arm64/v8
+    environment:
+      MEDUSA_BASE_URL: http://mockdusa:4567
+      MEDUSA_USER: medusa
+      MEDUSA_SECRET: secret
+    build:
+      context: .
+      dockerfile: docker/medusa-diff/Dockerfile-test
+    command: bash -c "sleep 10 && bundle exec rake test"

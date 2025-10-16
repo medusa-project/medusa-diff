@@ -1,0 +1,15 @@
+# Repository info
+
+title:             Medusa Diff Test Repository
+url:               https://medusa.library.illinois.edu
+notes:             This repository contains Medusa Diff test content.
+address_1:         123 Anywhere St.
+address_2:
+city:              Urbana
+state:             IL
+zip:               61820
+phone_number:      (555) 555-5555
+contact_email:     gschmitt@illinois.edu
+email:             gschmitt@illinois.edu
+ldap_admin_domain: uofi
+ldap_admin_group:  Some Group

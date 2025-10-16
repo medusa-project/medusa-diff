@@ -1,0 +1,19 @@
+FROM --platform=linux/arm64 ruby:3.4.5
+
+ENV RAILS_ENV=test
+ENV RAILS_LOG_TO_STDOUT=true
+ENV MEDUSA_BASE_URL=http://mockdusa:4567
+ENV MEDUSA_USER=medusa
+ENV MEDUSA_SECRET=secret
+ENV SNS_TOPIC_ARN=arn:aws:sns:us-east-2:123456789012:medusa-diff-test
+
+# Copy the Gemfile as well as the Gemfile.lock and install gems.
+# This is a separate step so the dependencies will be cached.
+RUN mkdir medusa-diff
+WORKDIR medusa-diff
+
+COPY Gemfile Gemfile.lock  ./
+RUN gem install bundler && bundle install
+
+# Copy the main application, except whatever is listed in .dockerignore.
+COPY . ./

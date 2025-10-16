@@ -1,0 +1,120 @@
+GIT
+  remote: https://github.com/medusa-project/medusa-client.git
+  revision: 53a23359b524f4f6d23b29a6c76902dc50904b7c
+  specs:
+    medusa-client (1.1.0)
+      httpclient
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    ast (2.4.3)
+    aws-eventstream (1.4.0)
+    aws-partitions (1.1171.0)
+    aws-sdk-athena (1.110.0)
+      aws-sdk-core (~> 3, >= 3.231.0)
+      aws-sigv4 (~> 1.5)
+    aws-sdk-core (3.233.0)
+      aws-eventstream (~> 1, >= 1.3.0)
+      aws-partitions (~> 1, >= 1.992.0)
+      aws-sigv4 (~> 1.9)
+      base64
+      bigdecimal
+      jmespath (~> 1, >= 1.6.1)
+      logger
+    aws-sdk-kms (1.113.0)
+      aws-sdk-core (~> 3, >= 3.231.0)
+      aws-sigv4 (~> 1.5)
+    aws-sdk-s3 (1.199.1)
+      aws-sdk-core (~> 3, >= 3.231.0)
+      aws-sdk-kms (~> 1)
+      aws-sigv4 (~> 1.5)
+    aws-sdk-sns (1.106.0)
+      aws-sdk-core (~> 3, >= 3.231.0)
+      aws-sigv4 (~> 1.5)
+    aws-sigv4 (1.12.1)
+      aws-eventstream (~> 1, >= 1.0.2)
+    base64 (0.3.0)
+    bigdecimal (3.3.1)
+    csv (3.3.5)
+    date (3.4.1)
+    docile (1.4.1)
+    httpclient (2.9.0)
+      mutex_m
+    jmespath (1.6.2)
+    json (2.15.1)
+    language_server-protocol (3.17.0.5)
+    lint_roller (1.1.0)
+    logger (1.7.0)
+    minitest (5.26.0)
+    mocha (2.7.1)
+      ruby2_keywords (>= 0.0.5)
+    mutex_m (0.3.0)
+    parallel (1.27.0)
+    parquet (0.2.15-aarch64-linux)
+    parquet (0.2.15-aarch64-linux-musl)
+    parquet (0.2.15-arm64-darwin)
+    parquet (0.2.15-x86_64-darwin)
+    parquet (0.2.15-x86_64-linux)
+    parquet (0.2.15-x86_64-linux-musl)
+    parser (3.3.9.0)
+      ast (~> 2.4.1)
+      racc
+    prism (1.5.2)
+    racc (1.8.1)
+    rainbow (3.1.1)
+    rake (13.3.0)
+    regexp_parser (2.11.3)
+    rexml (3.4.4)
+    rubocop (1.81.1)
+      json (~> 2.3)
+      language_server-protocol (~> 3.17.0.2)
+      lint_roller (~> 1.1.0)
+      parallel (~> 1.10)
+      parser (>= 3.3.0.2)
+      rainbow (>= 2.2.2, < 4.0)
+      regexp_parser (>= 2.9.3, < 3.0)
+      rubocop-ast (>= 1.47.1, < 2.0)
+      ruby-progressbar (~> 1.7)
+      unicode-display_width (>= 2.4.0, < 4.0)
+    rubocop-ast (1.47.1)
+      parser (>= 3.3.7.2)
+      prism (~> 1.4)
+    ruby-progressbar (1.13.0)
+    ruby2_keywords (0.0.5)
+    simplecov (0.22.0)
+      docile (~> 1.1)
+      simplecov-html (~> 0.11)
+      simplecov_json_formatter (~> 0.1)
+    simplecov-html (0.13.2)
+    simplecov_json_formatter (0.1.4)
+    unicode-display_width (3.2.0)
+      unicode-emoji (~> 4.1)
+    unicode-emoji (4.1.0)
+
+PLATFORMS
+  aarch64-linux
+  aarch64-linux-musl
+  arm64-darwin
+  x86_64-darwin
+  x86_64-linux
+  x86_64-linux-musl
+
+DEPENDENCIES
+  aws-sdk-athena
+  aws-sdk-s3
+  aws-sdk-sns
+  csv
+  date
+  logger
+  medusa-client!
+  minitest
+  mocha
+  parquet (~> 0.2.8)
+  rake
+  rexml (>= 3.3.6)
+  rubocop
+  simplecov
+
+BUNDLED WITH
+   2.7.2

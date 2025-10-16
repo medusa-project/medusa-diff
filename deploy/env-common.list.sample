@@ -1,0 +1,12 @@
+#
+# Contains variables used across environments.
+#
+# Copy to env-common.list and DO NOT commit that file to version control.
+#
+# Feel free to move variables between env-common.list and specific environment
+# files and vice versa.
+#
+
+AWS_REGION=
+
+ECR_HOST=

@@ -1,0 +1,15 @@
+#
+# Contains environment-specific variables.
+#
+# Copy to env-<env name>.list and DO NOT commit that file to version control.
+#
+# Feel free to move variables between env-<env name>.list and env-common.list.
+#
+
+IMAGE_NAME=
+
+###########################################
+# Container runtime environment variables
+###########################################
+
+RAILS_ENV=
