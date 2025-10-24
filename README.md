@@ -10,6 +10,17 @@ A dockerized Ruby app to determine the difference between what is in the Medusa 
 ## Setup
 
 Clone the repository and install dependencies:
+```shell
+git clone git@github.com:medusa-project/medusa-diff.git
+cd medusa-diff
+bundle install
+```
+
+## Deployment
+Use the deploy directory scripts:
+```shell
+./deploy/ecr-push.sh <environment>
+```
 
 ## Usage
 Run the app on fargate:
