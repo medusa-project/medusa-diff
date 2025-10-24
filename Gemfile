@@ -24,7 +24,7 @@ gem 'parquet', '~> 0.2.8'
 
 gem 'rake'
 
-gem "rexml", ">= 3.3.6"
+gem 'rexml', '>= 3.3.6'
 
 gem 'rubocop'
 
