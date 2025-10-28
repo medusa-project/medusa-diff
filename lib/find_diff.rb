@@ -15,13 +15,18 @@ class FindDiff
   INVENTORY_DIR_PATH = 'main/medusa-main/medusa-main-archived-inventory'
   DIFF_DIR_PATH = 'main/medusa-main/differences'
 
-  attr_reader :athena_client, :s3_client, :medusa_client, :yest_date_str, :yest_date_s3_str, :logger, :sns_client
+  attr_reader :athena_client, :s3_client, :medusa_client, :yest_date_str, :yest_date_s3_str, :logger, :sns_client,
+              :schema, :parquet_itr, :parquet_bytes, :athena_keys
 
   def initialize(s3_client: nil, athena_client: nil, sns_client: nil)
     region = 'us-east-2'
     @s3_client = s3_client || Aws::S3::Client.new(region: region)
     @athena_client = athena_client || Aws::Athena::Client.new(region: region)
     @sns_client = sns_client || Aws::SNS::Client.new(region: region)
+    @schema = [{ 'key' => 'string' }]
+    @parquet_itr = 0
+    @parquet_bytes = 0
+    @athena_keys = []
     # Configure Medusa client
     Medusa::Client.configuration = {
       medusa_base_url: ENV['MEDUSA_BASE_URL'],
@@ -32,6 +37,7 @@ class FindDiff
     yest_date = Date.today - 1
     @yest_date_str = yest_date.strftime('%m_%d')
     @yest_date_s3_str = yest_date.strftime('%Y-%m-%d')
+    $stdout.sync = true
     @logger = Logger.new($stdout)
   end
 
@@ -42,28 +48,35 @@ class FindDiff
     logger.info("Started Athena table creation with execution ID: #{athena_table_execution_id}")
 
     # Poll Athena for table creation status
-    athena_table_succeeded = athena_execution_succeeded(athena_table_execution_id)
+    athena_table_succeeded = athena_execution_succeeded?(athena_table_execution_id)
     exit(1) unless athena_table_succeeded
 
     # Traverse Medusa repositories, write keys to parquet files, and put parquet files to s3
-    parquet_itr = traverse_medusa_write_parquet(repositories)
-    put_parquet_to_s3(parquet_itr)
+    error_dirs = traverse_medusa(repositories)
+    process_error_dirs(error_dirs)
+
+    logger.info("Athena keys #{athena_keys.inspect}")
+
+    # if athena keys not empty write last parquet file
+    write_parquet unless @athena_keys.empty?
+
+    put_parquet_to_s3
 
     # Create Athena table for medusa db inventory data
     athena_diff_table_execution_id = create_athena_table_for_diff
     logger.info("Started Athena diff table creation with execution ID: #{athena_diff_table_execution_id}")
 
     # Poll Athena for diff table creation status
-    athena_diff_table_succeeded = athena_execution_succeeded(athena_diff_table_execution_id)
+    athena_diff_table_succeeded = athena_execution_succeeded?(athena_diff_table_execution_id)
     exit(1) unless athena_diff_table_succeeded
 
     # Query Athena for diff between s3 inventory and medusa db inventory
-    # diff_query_execution_id = query_athena_for_diff
-    diff_query_execution_id = testing_query_athena_for_diff
+    diff_query_execution_id = query_athena_for_diff
+    # diff_query_execution_id = testing_query_athena_for_diff
     logger.info("Started Athena diff query with execution ID: #{diff_query_execution_id}")
 
     # Poll Athena for diff query status
-    diff_query_succeeded = athena_execution_succeeded(diff_query_execution_id)
+    diff_query_succeeded = athena_execution_succeeded?(diff_query_execution_id)
     exit(1) unless diff_query_succeeded
 
     # Get Athena query results, put diff csv to s3, and notify via sns
@@ -75,13 +88,13 @@ class FindDiff
     # Cleanup Athena tables
     drop_athena_table_execution_id = drop_athena_table
     logger.info("Started Athena table drop with execution ID: #{drop_athena_table_execution_id}")
-    drop_athena_table_succeeded = athena_execution_succeeded(drop_athena_table_execution_id)
+    drop_athena_table_succeeded = athena_execution_succeeded?(drop_athena_table_execution_id)
     drop_athena_diff_table_execution_id = drop_athena_diff_table
     logger.info("Started Athena diff table drop with execution ID: #{drop_athena_diff_table_execution_id}")
-    drop_athena_diff_table_succeeded = athena_execution_succeeded(drop_athena_diff_table_execution_id)
+    drop_athena_diff_table_succeeded = athena_execution_succeeded?(drop_athena_diff_table_execution_id)
   end
 
-  def athena_execution_succeeded(execution_id)
+  def athena_execution_succeeded?(execution_id)
     # Poll Athena for query execution status
     logger.info("Processing Athena execution ID: #{execution_id}")
     loop do
@@ -147,14 +160,10 @@ class FindDiff
   end
 
 
-  def traverse_medusa_write_parquet(repositories)
+  def traverse_medusa(repositories)
     # Traverse Medusa repositories and write keys to parquet files
     logger.info('Traversing Medusa repositories and writing keys to Parquet files')
-    max_parquet_bytes = 134_217_728 # 128MB
-    parquet_itr = 0
-    parquet_bytes = 0
-    schema = [{ 'key' => 'string' }]
-    athena_keys = []
+    error_dirs = []
 
     # For each repository...
     repositories.each do |repo|
@@ -174,47 +183,88 @@ class FindDiff
 
           logger.info("Processing bit level file group: #{file_group.title} (ID: #{file_group.id})")
           root_dir = file_group.directory
+          logger.info("Processing directory ID: #{root_dir.id}")
 
           # And all files and directories contained within.
-          root_dir.walk_tree do |node|
-            # For each file, add its relative key to the athena keys array
-            if node.is_a?(Medusa::File)
-              key = node.relative_key
-              key_size = key.bytesize
-              if (parquet_bytes + key_size) < max_parquet_bytes
-                athena_keys << [key]
-                parquet_bytes += key_size
-              else
-                # write parquet file
-                Parquet.write_rows(athena_keys.each, schema: schema, write_to: "#{yest_date_str}_#{parquet_itr}.parquet")
-                parquet_exists = File.exist?("#{yest_date_str}_#{parquet_itr}.parquet")
-                logger.info("Wrote Parquet file: #{yest_date_str}_#{parquet_itr}.parquet") if parquet_exists
-                logger.error("Error writing Parquet file: #{yest_date_str}_#{parquet_itr}.parquet") unless parquet_exists
-                # reset athena keys and parquet bytes
-                parquet_itr += 1
-                athena_keys = [key]
-                parquet_bytes = key_size
-              end
+          begin
+            root_dir.walk_tree do |node|
+              # For each file, add its relative key to the athena keys array
+              organize_parquet(node) if node.is_a?(Medusa::File)
+
             end
+          rescue IOError => e
+            http_status = e.message.scan(/\d+/).first
+            logger.error("HTTP status error processing directory ID: #{root_dir.id} - #{e.message}")
+            # Some file groups are too large for Medusa to extract the tree at the root, process these separately
+            error_dirs << root_dir.id if http_status == '504'
+          rescue StandardError => e
+            logger.error("Unknown error processing directory ID: #{root_dir.id} - #{e.message}")
+            exit(1)
           end
         end
       end
     end
-    # if athena keys not empty write last parquet file
-    Parquet.write_rows(athena_keys.each, schema: schema, write_to: "#{yest_date_str}_#{parquet_itr}.parquet") unless athena_keys.empty?
-    parquet_exists = File.exist?("#{yest_date_str}_#{parquet_itr}.parquet")
-    logger.info("Wrote Parquet file: #{yest_date_str}_#{parquet_itr}.parquet") if parquet_exists
-    logger.error("Error writing Parquet file: #{yest_date_str}_#{parquet_itr}.parquet") unless parquet_exists
-    parquet_itr
+    error_dirs
   end
 
-  def put_parquet_to_s3(parquet_itr)
+  def organize_parquet(file)
+    max_parquet_bytes = 134_217_728 # 128MB
+    key = file.relative_key
+    key_size = key.bytesize
+    if (@parquet_bytes + key_size) < max_parquet_bytes
+      @athena_keys << [key]
+      @parquet_bytes += key_size
+    else
+      # write parquet file
+      write_parquet
+      # reset athena keys and parquet bytes
+      @parquet_itr += 1
+      @athena_keys = [key]
+      @parquet_bytes = key_size
+    end
+  end
+
+  def write_parquet
+    Parquet.write_rows(@athena_keys.each, schema: @schema, write_to: "#{@yest_date_str}_#{@parquet_itr}.parquet")
+  end
+
+  def process_error_dirs(error_dirs)
+    error_dirs.each do |error_dir|
+      logger.info("Processing directory ID: #{error_dir}")
+      walk_large_tree(Medusa::Directory.with_id(error_dir))
+    end
+  end
+
+  def walk_large_tree(parent_dir)
+    parent_dir.directories.each do |dir|
+      logger.info("Attempting to walk directory ID: #{dir.id}")
+      begin
+        dir.walk_tree do |node|
+          #if not erroring out process tree
+          organize_parquet(node) if node.is_a?(Medusa::File)
+        end
+      rescue IOError => e
+        # handle directory files before moving on to the next child directory
+        write_dir_files(dir)
+        walk_large_tree(dir)
+      end
+    end
+  end
+
+  def write_dir_files(dir)
+    files = dir.files
+    files.each do |file|
+      organize_parquet(file)
+    end
+  end
+
+  def put_parquet_to_s3
     # Put parquet files to s3
     logger.info('Putting Parquet files to S3')
     key_prefix = "#{INVENTORY_DIR_PATH}/#{@yest_date_s3_str}/diff/data"
     logger.info("Putting Parquet files to s3://#{MEDUSA_INVENTORY_BUCKET}/#{key_prefix}/")
     # for 0 through parquet_itr put parquet file to s3
-    (0..parquet_itr).each do |i|
+    (0..@parquet_itr).each do |i|
       @s3_client.put_object(bucket: MEDUSA_INVENTORY_BUCKET, key: "#{key_prefix}/#{@yest_date_str}_#{i}.parquet", body: File.read("#{@yest_date_str}_#{i}.parquet"))
     end
   end

@@ -32,7 +32,7 @@ class FindDiffTest < Minitest::Test
 
     @athena_client.expects(:get_query_execution).with({query_execution_id: '1234'}).returns(execution_resp)
 
-    succeeded = @find_diff.athena_execution_succeeded('1234')
+    succeeded = @find_diff.athena_execution_succeeded?('1234')
     assert_equal false, succeeded
   end
 
@@ -46,13 +46,24 @@ class FindDiffTest < Minitest::Test
     @find_diff.create_athena_table
   end
 
-  def test_traverse_medusa_write_parquet_and_put_parquet_to_s3
-    @s3_client.expects(:put_object).once.returns(true)
-
-    parquet_itr = @find_diff.traverse_medusa_write_parquet([1])
+  def test_traverse_medusa_organize_parquet_write_and_put_to_s3
+    error_dirs = @find_diff.traverse_medusa([1])
+    parquet_itr = @find_diff.parquet_itr
+    assert error_dirs.empty?
     assert parquet_itr.is_a?(Integer)
 
-    @find_diff.put_parquet_to_s3(parquet_itr)
+    @find_diff.write_parquet
+    assert File.exist?("#{@find_diff.yest_date_str}_0.parquet")
+
+    @s3_client.expects(:put_object).once
+    @find_diff.put_parquet_to_s3
+  end
+
+
+  def test_process_error_dirs
+    @find_diff.expects(:organize_parquet).times(4)
+
+    @find_diff.process_error_dirs([2173594262])
   end
 
   def test_create_athena_table_for_diff
