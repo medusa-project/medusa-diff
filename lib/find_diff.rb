@@ -230,6 +230,7 @@ class FindDiff
   end
 
   def write_parquet
+    logger.info("Writing Parquet file for #{@yest_date_str} iteration #{@parquet_itr}")
     Parquet.write_rows(@athena_keys.each, schema: @schema, write_to: "#{@yest_date_str}_#{@parquet_itr}.parquet")
   end
 
