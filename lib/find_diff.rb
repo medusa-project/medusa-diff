@@ -194,9 +194,14 @@ class FindDiff
             end
           rescue IOError => e
             http_status = e.message.scan(/\d+/).first
-            logger.error("HTTP status error processing directory ID: #{root_dir.id} - #{e.message}")
+            logger.info("HTTP status error processing directory ID: #{root_dir.id} - #{e.message}")
             # Some file groups are too large for Medusa to extract the tree at the root, process these separately
-            error_dirs << root_dir.id if http_status == '504'
+            if http_status == '504'
+              error_dirs << root_dir.id
+            else
+              logger.error('Non 504 status error') unless http_status == '504'
+              exit(1)
+            end
           rescue StandardError => e
             logger.error("Unknown error processing directory ID: #{root_dir.id} - #{e.message}")
             exit(1)
@@ -230,7 +235,7 @@ class FindDiff
 
   def process_error_dirs(error_dirs)
     error_dirs.each do |error_dir|
-      logger.info("Processing directory ID: #{error_dir}")
+      logger.info("Processing error directory ID: #{error_dir}")
       walk_large_tree(Medusa::Directory.with_id(error_dir))
     end
   end
@@ -240,11 +245,12 @@ class FindDiff
       logger.info("Attempting to walk directory ID: #{dir.id}")
       begin
         dir.walk_tree do |node|
-          #if not erroring out process tree
+          # if not erroring out process tree
           organize_parquet(node) if node.is_a?(Medusa::File)
         end
       rescue IOError => e
         # handle directory files before moving on to the next child directory
+        logger.info('Directory tree too long, moving on to subdirectories')
         write_dir_files(dir)
         walk_large_tree(dir)
       end
@@ -307,22 +313,22 @@ class FindDiff
     resp.query_execution_id
   end
 
-  def testing_query_athena_for_diff
-    # Query athena for diff between s3 inventory and medusa db inventory
-    logger.info("Querying Athena for diff between S3 inventory and Medusa DB inventory for date #{@yest_date_str}")
-    athena_query = %(SELECT DISTINCT s3.key AS file_in_s3_not_in_medusa
-                        FROM #{MEDUSA_ATHENA_DB}."medusa_inventory_#{@yest_date_str}" AS s3
-                        LEFT JOIN #{MEDUSA_ATHENA_DB}."medusa_inventory_diff_#{@yest_date_str}" AS med ON s3.key = med.key
-                        WHERE med.key IS NOT NULL;)
-    resp = @athena_client.start_query_execution({
-                                                  query_string: athena_query,
-                                                  query_execution_context: {
-                                                    database: MEDUSA_ATHENA_DB.to_s,
-                                                  },
-                                                  work_group: MEDUSA_ATHENA_WORKGROUP.to_s,
-                                                })
-    resp.query_execution_id
-  end
+  # def testing_query_athena_for_diff
+  #   # Query athena for diff between s3 inventory and medusa db inventory
+  #   logger.info("Querying Athena for diff between S3 inventory and Medusa DB inventory for date #{@yest_date_str}")
+  #   athena_query = %(SELECT DISTINCT s3.key AS file_in_s3_not_in_medusa
+  #                       FROM #{MEDUSA_ATHENA_DB}."medusa_inventory_#{@yest_date_str}" AS s3
+  #                       LEFT JOIN #{MEDUSA_ATHENA_DB}."medusa_inventory_diff_#{@yest_date_str}" AS med ON s3.key = med.key
+  #                       WHERE med.key IS NOT NULL;)
+  #   resp = @athena_client.start_query_execution({
+  #                                                 query_string: athena_query,
+  #                                                 query_execution_context: {
+  #                                                   database: MEDUSA_ATHENA_DB.to_s,
+  #                                                 },
+  #                                                 work_group: MEDUSA_ATHENA_WORKGROUP.to_s,
+  #                                               })
+  #   resp.query_execution_id
+  # end
 
   def get_athena_query_results(query_id)
     # write results to csv file
