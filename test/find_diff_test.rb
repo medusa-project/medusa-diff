@@ -56,14 +56,60 @@ class FindDiffTest < Minitest::Test
     assert File.exist?("#{@find_diff.yest_date_str}_0.parquet")
 
     @s3_client.expects(:put_object).once
-    @find_diff.put_parquet_to_s3
+    @find_diff.put_parquet_to_s3("#{@find_diff.yest_date_str}_0.parquet")
   end
 
+  def test_organize_parquet_force_write
+    @s3_client.expects(:put_object).once
+    @find_diff.organize_parquet(nil, true)
+    assert @find_diff.athena_keys.empty?
+  end
+
+  def test_get_tree_json_and_walk_tree_json_directory
+    tree_json = @find_diff.get_tree_json(Medusa::Directory.with_id(2173594262))
+    assert tree_json.is_a?(Hash)
+
+    @find_diff.expects(:walk_tree_json)
+    @find_diff.walk_tree_json(tree_json)
+  end
+
+  def test_get_tree_json_and_walk_tree_json_file
+    tree_json = @find_diff.get_tree_json(Medusa::Directory.with_id(482817878))
+    assert tree_json.is_a?(Hash)
+
+    @find_diff.expects(:organize_parquet)
+    @find_diff.walk_tree_json(tree_json)
+  end
 
   def test_process_error_dirs
-    @find_diff.expects(:organize_parquet).times(4)
+    @find_diff.expects(:walk_large_json_tree).once
 
-    @find_diff.process_error_dirs([2173594262])
+    @find_diff.process_error_dirs([556774913])
+  end
+
+  def test_walk_large_json_tree
+    @find_diff.expects(:get_tree_json).times(2)
+    @find_diff.expects(:walk_tree_json).times(2)
+
+    @find_diff.walk_large_json_tree(Medusa::Directory.with_id(556774913))
+  end
+
+  def walk_large_json_tree_handles_timeout_and_retries
+    dir = Minitest::Mock.new
+    dir.expect :directories, [Minitest::Mock.new, Minitest::Mock.new]
+    @find_diff.expects(:get_tree_json).raises(TimeoutError).twice
+    @find_diff.expects(:write_dir_files).twice
+    @find_diff.expects(:walk_large_json_tree).twice
+
+    @find_diff.walk_large_json_tree(dir)
+  end
+
+  def write_dir_files_retries_on_io_error
+    dir = Minitest::Mock.new
+    dir.expect :files, []
+    @find_diff.expects(:organize_parquet).never
+    @find_diff.expects(:write_dir_files).with(dir, 1).once
+    @find_diff.write_dir_files(dir, 0)
   end
 
   def test_create_athena_table_for_diff

@@ -2,11 +2,14 @@
 require 'aws-sdk-athena'
 require 'aws-sdk-s3'
 require 'aws-sdk-sns'
-require 'medusa-client'
-require 'parquet'
+require 'csv'
 require 'date'
 require 'logger'
-require 'csv'
+require 'medusa-client'
+require 'objspace'
+require 'parquet'
+require_relative 'timeout_error'
+
 # Generate Athena tables from Medusa S3 inventory and Medusa DB inventory to find differences
 class FindDiff
   MEDUSA_ATHENA_DB = 'medusa_main_inventory'
@@ -53,14 +56,12 @@ class FindDiff
 
     # Traverse Medusa repositories, write keys to parquet files, and put parquet files to s3
     error_dirs = traverse_medusa(repositories)
+    organize_parquet(nil, true) unless @athena_keys.empty?
+    logger.info("Error directories: #{error_dirs}") if error_dirs.any?
     process_error_dirs(error_dirs)
 
-    logger.info("Athena keys #{athena_keys.inspect}")
-
     # if athena keys not empty write last parquet file
-    write_parquet unless @athena_keys.empty?
-
-    put_parquet_to_s3
+    organize_parquet(nil, true) unless @athena_keys.empty?
 
     # Create Athena table for medusa db inventory data
     athena_diff_table_execution_id = create_athena_table_for_diff
@@ -187,21 +188,12 @@ class FindDiff
 
           # And all files and directories contained within.
           begin
-            root_dir.walk_tree do |node|
-              # For each file, add its relative key to the athena keys array
-              organize_parquet(node) if node.is_a?(Medusa::File)
-
-            end
-          rescue IOError => e
-            http_status = e.message.scan(/\d+/).first
-            logger.info("HTTP status error processing directory ID: #{root_dir.id} - #{e.message}")
+            tree_data = get_tree_json(root_dir)
+            walk_tree_json(tree_data)
+          rescue TimeoutError => e
+            logger.info("Timeout while processing directory ID: #{root_dir.id}")
             # Some file groups are too large for Medusa to extract the tree at the root, process these separately
-            if http_status == '504'
-              error_dirs << root_dir.id
-            else
-              logger.error('Non 504 status error') unless http_status == '504'
-              exit(1)
-            end
+            error_dirs << root_dir.id
           rescue StandardError => e
             logger.error("Unknown error processing directory ID: #{root_dir.id} - #{e.message}")
             exit(1)
@@ -212,67 +204,110 @@ class FindDiff
     error_dirs
   end
 
-  def organize_parquet(file)
-    max_parquet_bytes = 134_217_728 # 128MB
-    key = file.relative_key
-    key_size = key.bytesize
-    if (@parquet_bytes + key_size) < max_parquet_bytes
-      @athena_keys << [key]
-      @parquet_bytes += key_size
+  def get_tree_json(dir)
+    url = dir.directory_tree_url
+    response = @medusa_client.get(url)
+
+    if response.status < 300
+      JSON.parse(response.body)
+    elsif response.status == 404
+      raise Medusa::NotFoundError, "Directory ID #{@id} not found in Medusa: #{url}"
+    elsif response.status == 504
+      raise TimeoutError, "Medusa request timed out: #{url}"
     else
-      # write parquet file
+      raise IOError, "Received HTTP #{response.status} for GET #{url}"
+    end
+  end
+
+  def walk_tree_json(dir_struct)
+    if dir_struct['subdirectories'].respond_to?(:each)
+      dir_struct['subdirectories'].each do |subdir|
+        walk_tree_json(subdir)
+      end
+    end
+    if dir_struct['files'].respond_to?(:each)
+      dir_struct['files'].each do |file|
+        organize_parquet(file['relative_pathname'])
+      end
+    end
+  end
+
+  def organize_parquet(key, force_write = false)
+    # max_parquet_bytes = 134_217_728 # 128MB
+    max_parquet_bytes = 67_108_864 # 64MB
+    if force_write
       write_parquet
-      # reset athena keys and parquet bytes
       @parquet_itr += 1
-      @athena_keys = [key]
-      @parquet_bytes = key_size
+      @athena_keys = []
+      @parquet_bytes = 0
+    else
+      key_size = key.bytesize
+      if (@parquet_bytes + key_size) >= max_parquet_bytes
+      # write parquet file
+        write_parquet
+        # reset athena keys and parquet bytes
+        @parquet_itr += 1
+        @athena_keys = [[key]]
+        @parquet_bytes = key_size
+      else
+        @athena_keys << [key]
+        @parquet_bytes += key_size
+      end
     end
   end
 
   def write_parquet
     logger.info("Writing Parquet file for #{@yest_date_str} iteration #{@parquet_itr}")
-    Parquet.write_rows(@athena_keys.each, schema: @schema, write_to: "#{@yest_date_str}_#{@parquet_itr}.parquet")
+    parquet_file_name = "#{@yest_date_str}_#{@parquet_itr}.parquet"
+    Parquet.write_rows(@athena_keys.each, schema: @schema, write_to: parquet_file_name)
+    put_parquet_to_s3(parquet_file_name)
+  end
+
+  def put_parquet_to_s3(parquet_file_name)
+    # Put parquet files to s3
+    key_prefix = "#{INVENTORY_DIR_PATH}/#{@yest_date_s3_str}/diff/data"
+    logger.info("Putting Parquet file #{parquet_file_name} to s3://#{MEDUSA_INVENTORY_BUCKET}/#{key_prefix}/")
+    @s3_client.put_object(bucket: MEDUSA_INVENTORY_BUCKET,
+                          key: "#{key_prefix}/#{parquet_file_name}",
+                          body: File.read(parquet_file_name))
   end
 
   def process_error_dirs(error_dirs)
     error_dirs.each do |error_dir|
       logger.info("Processing error directory ID: #{error_dir}")
-      walk_large_tree(Medusa::Directory.with_id(error_dir))
+      walk_large_json_tree(Medusa::Directory.with_id(error_dir))
     end
   end
 
-  def walk_large_tree(parent_dir)
+  def walk_large_json_tree(parent_dir)
     parent_dir.directories.each do |dir|
-      logger.info("Attempting to walk directory ID: #{dir.id}")
       begin
-        dir.walk_tree do |node|
-          # if not erroring out process tree
-          organize_parquet(node) if node.is_a?(Medusa::File)
-        end
-      rescue IOError => e
+        tree_data = get_tree_json(dir)
+        walk_tree_json(tree_data)
+      rescue TimeoutError => e
         # handle directory files before moving on to the next child directory
-        logger.info('Directory tree too long, moving on to subdirectories')
+        logger.info("Directory #{dir.id} tree too large, moving on to subdirectories")
         write_dir_files(dir)
-        walk_large_tree(dir)
+        walk_large_json_tree(dir)
       end
     end
   end
 
-  def write_dir_files(dir)
-    files = dir.files
-    files.each do |file|
-      organize_parquet(file)
-    end
-  end
-
-  def put_parquet_to_s3
-    # Put parquet files to s3
-    logger.info('Putting Parquet files to S3')
-    key_prefix = "#{INVENTORY_DIR_PATH}/#{@yest_date_s3_str}/diff/data"
-    logger.info("Putting Parquet files to s3://#{MEDUSA_INVENTORY_BUCKET}/#{key_prefix}/")
-    # for 0 through parquet_itr put parquet file to s3
-    (0..@parquet_itr).each do |i|
-      @s3_client.put_object(bucket: MEDUSA_INVENTORY_BUCKET, key: "#{key_prefix}/#{@yest_date_str}_#{i}.parquet", body: File.read("#{@yest_date_str}_#{i}.parquet"))
+  def write_dir_files(dir, retry_count = 0)
+    begin
+      files = dir.files
+      files.each do |file|
+        organize_parquet(file.relative_key)
+      end
+    rescue IOError => e
+      logger.error("Error getting files for directory #{dir.id} files: #{e.message}")
+      if retry_count < 3
+        logger.info("Retrying directory #{dir.id} files")
+        write_dir_files(dir, retry_count + 1)
+      else
+        logger.error("Error getting files for directory #{dir.id} after three tries, exiting: #{e.message}")
+        exit(1)
+      end
     end
   end
 
