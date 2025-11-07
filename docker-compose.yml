@@ -12,7 +12,6 @@ services:
   medusa-diff:
     depends_on:
       - mockdusa
-    platform: linux/arm64/v8
     environment:
       MEDUSA_BASE_URL: http://mockdusa:4567
       MEDUSA_USER: medusa
