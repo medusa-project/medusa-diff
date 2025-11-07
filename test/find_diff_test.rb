@@ -126,7 +126,7 @@ class FindDiffTest < Minitest::Test
     mock_resp = Minitest::Mock.new
     mock_resp.expect :query_execution_id, '1234'
     @athena_client.expects(:start_query_execution).with do |params|
-      params[:query_string].include?(%Q{LEFT JOIN #{FindDiff::MEDUSA_ATHENA_DB}."medusa_inventory_diff_#{@find_diff.yest_date_str}" AS med ON s3.key = med.key}) && params[:query_string].include?('WHERE med.key IS NULL;')
+      params[:query_string].include?(%Q{LEFT JOIN #{FindDiff::MEDUSA_ATHENA_DB}."medusa_inventory_diff_#{@find_diff.yest_date_str}" AS med ON s3.key = med.key}) && params[:query_string].include?('WHERE med.key IS NULL')
     end.returns(mock_resp)
 
     @find_diff.query_athena_for_diff

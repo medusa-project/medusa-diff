@@ -46,7 +46,7 @@ class FindDiff
 
   def run(repositories)
     logger.info("Starting FindDiff for repositories: #{repositories}")
-    # Create Athena table for s3 inventory data
+    # Create Athena table for s3 inventory data from the day before
     athena_table_execution_id = create_athena_table
     logger.info("Started Athena table creation with execution ID: #{athena_table_execution_id}")
 
@@ -56,14 +56,18 @@ class FindDiff
 
     # Traverse Medusa repositories, write keys to parquet files, and put parquet files to s3
     error_dirs = traverse_medusa(repositories)
+
+    # write remaining keys to parquet before working on error dirs in case of errors
     organize_parquet(nil, true) unless @athena_keys.empty?
+
+    # large directories that failed to process before require sepcial handling
     logger.info("Error directories: #{error_dirs}") if error_dirs.any?
     process_error_dirs(error_dirs)
 
     # if athena keys not empty write last parquet file
     organize_parquet(nil, true) unless @athena_keys.empty?
 
-    # Create Athena table for medusa db inventory data
+    # Create Athena table for medusa db inventory data (parquet files)
     athena_diff_table_execution_id = create_athena_table_for_diff
     logger.info("Started Athena diff table creation with execution ID: #{athena_diff_table_execution_id}")
 
@@ -73,7 +77,6 @@ class FindDiff
 
     # Query Athena for diff between s3 inventory and medusa db inventory
     diff_query_execution_id = query_athena_for_diff
-    # diff_query_execution_id = testing_query_athena_for_diff
     logger.info("Started Athena diff query with execution ID: #{diff_query_execution_id}")
 
     # Poll Athena for diff query status
@@ -275,7 +278,10 @@ class FindDiff
   def process_error_dirs(error_dirs)
     error_dirs.each do |error_dir|
       logger.info("Processing error directory ID: #{error_dir}")
-      walk_large_json_tree(Medusa::Directory.with_id(error_dir))
+      # handle error dir files before walking tree
+      medusa_error_dir = Medusa::Directory.with_id(error_dir)
+      write_dir_files(medusa_error_dir)
+      walk_large_json_tree(medusa_error_dir)
     end
   end
 
@@ -338,7 +344,9 @@ class FindDiff
     athena_query = %(SELECT DISTINCT s3.key AS file_in_s3_not_in_medusa
                         FROM #{MEDUSA_ATHENA_DB}."medusa_inventory_#{@yest_date_str}" AS s3
                         LEFT JOIN #{MEDUSA_ATHENA_DB}."medusa_inventory_diff_#{@yest_date_str}" AS med ON s3.key = med.key
-                        WHERE med.key IS NULL;)
+                        WHERE med.key IS NULL
+                        AND s3.is_delete_marker = false
+                        AND s3.is_latest = true;)
     resp = @athena_client.start_query_execution({
                                                   query_string: athena_query,
                                                   query_execution_context: {
@@ -348,23 +356,6 @@ class FindDiff
                                                 })
     resp.query_execution_id
   end
-
-  # def testing_query_athena_for_diff
-  #   # Query athena for diff between s3 inventory and medusa db inventory
-  #   logger.info("Querying Athena for diff between S3 inventory and Medusa DB inventory for date #{@yest_date_str}")
-  #   athena_query = %(SELECT DISTINCT s3.key AS file_in_s3_not_in_medusa
-  #                       FROM #{MEDUSA_ATHENA_DB}."medusa_inventory_#{@yest_date_str}" AS s3
-  #                       LEFT JOIN #{MEDUSA_ATHENA_DB}."medusa_inventory_diff_#{@yest_date_str}" AS med ON s3.key = med.key
-  #                       WHERE med.key IS NOT NULL;)
-  #   resp = @athena_client.start_query_execution({
-  #                                                 query_string: athena_query,
-  #                                                 query_execution_context: {
-  #                                                   database: MEDUSA_ATHENA_DB.to_s,
-  #                                                 },
-  #                                                 work_group: MEDUSA_ATHENA_WORKGROUP.to_s,
-  #                                               })
-  #   resp.query_execution_id
-  # end
 
   def get_athena_query_results(query_id)
     # write results to csv file
@@ -378,6 +369,10 @@ class FindDiff
       resp.result_set.rows.each_with_index do |row, index|
         # skip header row
         next if index.zero?
+
+        key = row.data[0].var_char_value
+        # skip "directory" files, these are empty keys to force the creation of a "directory" in s3
+        next if key.end_with?('/')
 
         CSV.open(csv_filename, 'a') do |csv|
           csv << [row.data[0].var_char_value]
