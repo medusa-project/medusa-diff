@@ -360,6 +360,7 @@ class FindDiff
   def get_athena_query_results(query_id)
     # write results to csv file
     csv_filename = "medusa_diff_#{@yest_date_str}.csv"
+    csv_rows = 0
     next_token = nil
     loop do
       resp = @athena_client.get_query_results({
@@ -376,11 +377,13 @@ class FindDiff
 
         CSV.open(csv_filename, 'a') do |csv|
           csv << [row.data[0].var_char_value]
+          csv_rows += 1
         end
       end
       next_token = resp.next_token
       break if next_token.nil?
     end
+    logger.info("Number of S3 objects not in medusa database: #{csv_rows}")
     csv_filename
   end
 
